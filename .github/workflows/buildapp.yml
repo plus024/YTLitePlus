@@ -26,11 +26,6 @@ on:
         default: ""
         required: false
         type: string
-      create_release:
-        description: "Create a draft release"
-        default: true
-        required: false
-        type: boolean
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -134,45 +129,5 @@ jobs:
           BUNDLE_ID: ${{ inputs.bundle_id }}
           APP_NAME: ${{ inputs.app_name }}
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4.3.3
-        with:
-          name: YTLitePlus_${{ env.YT_VERSION }}_${{ env.YTLITE_VERSION }}
-          path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
-          if-no-files-found: error
-          
-      - name: Upload Artifact to Catbox
-        run: |
-          RESPONSE=$(curl -F "reqtype=fileupload" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://catbox.moe/user/api.php)
-          CATBOX_URL=$(echo $RESPONSE | grep -o -E 'https://files.catbox.moe/[^"]*')
-          echo "Uploaded artifact to $CATBOX_URL"
-          CATBOX_FILE=$(echo $CATBOX_URL | sed 's|https://files.catbox.moe/||')
-          echo "CATBOX_FILE=$CATBOX_FILE" >> $GITHUB_ENV
-      
-      - name: Prepare Release Notes
-        run: |
-          export TODAY=$(date '+%Y-%m-%d')
-          sed "s/%ytliteplus_version%/${{ env.YTLITE_VERSION }}/g; s/%youtube_version%/${{ env.YT_VERSION }}/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
-          main/.github/RELEASE_TEMPLATE/Release.md > ${{ github.workspace }}/release_notes.md
-
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v2.0.5
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRAFT: ${{ inputs.create_release }}
-        with:
-          tag_name: v${{ env.YT_VERSION }}-${{ env.YTLITE_VERSION }}
-          name: v${{ env.YT_VERSION }}-${{ env.YTLITE_VERSION }} - YTLitePlus
-          files: main/packages/*.ipa
-          draft: ${{ env.DRAFT }}
-          body_path: ${{ github.workspace }}/release_notes.md
-
-      - name: Update Altstore Source with latest release
-        run: |
-          curl --location --request POST 'https://api.github.com/repos/Balackburn/YTLitePlusAltstore/dispatches' \
-          --header 'Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN }}' \
-          --header 'Content-Type: application/json' \
-          --data-raw '{
-            "event_type": "update-altstore-source-trigger"
-          }'
+      - name: Upload Artifact to Litterbox
+        run: curl -F "reqtype=fileupload" -F "time=1h" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://litterbox.catbox.moe/resources/internals/api.php
