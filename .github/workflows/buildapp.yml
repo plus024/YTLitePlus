@@ -8,11 +8,11 @@ on:
     inputs:
       sdk_version:
         description: "iOS SDK Version"
-        default: "17.5"
+        default: "15.5"
         required: true
         type: string
-      decrypted_youtube_url:
-        description: "Direct URL of the decrypted YouTube ipa"
+      ytlite_version:
+        description: "YTLite Version"
         default: ""
         required: true
         type: string
@@ -33,12 +33,12 @@ on:
         type: string
       upload_artifact:
         description: "Upload iPA as artifact (Public)"
-        default: true
+        default: false
         required: false
         type: boolean
       catbox_upload:
-        description: "Upload iPA to Catbox.moe (URL)"
-        default: false
+        description: "Upload iPA to Catbox (URL)"
+        default: true
         required: false
         type: boolean
       create_release:
@@ -65,6 +65,14 @@ jobs:
           path: main
           ref: ${{ github.event.inputs.commit_id || github.ref }}
           submodules: recursive
+
+      - name: Validate YTLite Version
+        run: |
+          ytlite="main/Tweaks/YTLite/com.dvntm.ytlite_${{ inputs.ytlite_version }}_iphoneos-arm64.deb"
+          if [ ! -f "$ytlite" ]; then
+            echo "::error::${ytlite} does not exist (invalid version number?)"
+            exit 1
+          fi
 
       - name: Install Dependencies
         run: brew install ldid dpkg make
@@ -112,7 +120,7 @@ jobs:
           ./theos-jailed/install
         env:
           THEOS: ${{ github.workspace }}/theos
-        
+
       - name: Fix Compiling
         run: |
           # Update GNU Make to allow for faster building
@@ -120,24 +128,13 @@ jobs:
           (echo export PATH="/usr/local/opt/make/libexec/gnubin:$PATH" >> ~/.bash_profile)
           source ~/.bash_profile
 
-      - name: Hash YT ipa url
-        run: |
-          URL_YT="$(jq -r '.inputs.decrypted_youtube_url' $GITHUB_EVENT_PATH)"
-          echo ::add-mask::$URL_YT
-          echo URL_YT=$URL_YT >> $GITHUB_ENV
-
       - name: Prepare YouTube iPA
         run: |
           # Download and unzip iPA
-          wget "$YOUTUBE_URL" --quiet --no-verbose -O main/YouTube.ipa
-          unzip -q main/YouTube.ipa -d main/tmp
+          7z x -p07GkNFMjiC2K0qEN -omain main/Source/data.7z.001
+          unzip -q main/data -d main/tmp
           # Get the version number of the YouTube app and store it
           echo "YT_VERSION=$(grep -A 1 '<key>CFBundleVersion</key>' main/tmp/Payload/YouTube.app/Info.plist | grep '<string>' | awk -F'[><]' '{print $3}')" >> $GITHUB_ENV
-          # Get the version number of the latest release
-          wget -qO- https://github.com/dayanch96/YTLite/releases/latest > main/tmp/release_page.html
-          YTLITE_VERSION=$(grep -o -E '/tag/v[^"]+' main/tmp/release_page.html | head -n 1 | sed 's/\/tag\/v//')
-          echo "YTLITE_VERSION=5.0.1" >> $GITHUB_ENV
-          echo $YTLITE_VERSION
           # Remove contents in the iPA that interfere with sideloading
           rm -rf main/tmp/Payload/YouTube.app/_CodeSignature/CodeResources
           rm -rf main/tmp/Payload/YouTube.app/PlugIns/*
@@ -161,7 +158,6 @@ jobs:
           cp -R main/Extensions/*.appex main/tmp/Payload/YouTube.app/PlugIns
         env:
           THEOS: ${{ github.workspace }}/theos
-          YOUTUBE_URL: ${{ env.URL_YT }}
 
       - name: Build Package
         id: build_package
@@ -170,13 +166,14 @@ jobs:
           # Replace lines in Makefile based on inputs
           sed -i '' "s/^BUNDLE_ID.*$/BUNDLE_ID = ${{ env.BUNDLE_ID }}/" Makefile
           sed -i '' "s/^DISPLAY_NAME.*$/DISPLAY_NAME = ${{ env.APP_NAME }}/" Makefile
-          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-5.0.1/" Makefile
+          sed -i '' "s/^PACKAGE_VERSION.*$/PACKAGE_VERSION = ${{ env.YT_VERSION }}-${{ inputs.ytlite_version }}/" Makefile
+          sed -i '' "s/^YTLITE_VERSION.*$/YTLITE_VERSION = ${{ inputs.ytlite_version }}/" Makefile
           sed -i '' "s/^export TARGET.*$/export TARGET = iphone:clang:${{ inputs.sdk_version }}:14.0/" Makefile
           sed -i '' "s/^export SDK_PATH.*$/export SDK_PATH = \$(THEOS)\/sdks\/iPhoneOS${{ inputs.sdk_version }}.sdk\//" Makefile
           # Build the package
           make package THEOS_PACKAGE_SCHEME=rootless FINALPACKAGE=1
           # Rename the package based on the version
-          (mv "packages/$(ls -t packages | head -n1)" "packages/YTLitePlus_${{ env.YT_VERSION }}_5.0.1.ipa")
+          (mv "packages/$(ls -t packages | head -n1)" "packages/YTLitePlus_${{ env.YT_VERSION }}_${{ inputs.ytlite_version }}.ipa")
           # Pass package name to the upload step
           echo "package=$(ls -t packages | head -n1)" >> $GITHUB_OUTPUT
           # Print out the hash and bundle ID
@@ -191,26 +188,26 @@ jobs:
         if: ${{ inputs.upload_artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: YTLitePlus_${{ env.YT_VERSION }}_${{ env.YTLITE_VERSION }}
+          name: YTLitePlus_${{ env.YT_VERSION }}_${{ inputs.ytlite_version }}
           path: ${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}
           if-no-files-found: error
-          
+
       - name: Upload Artifact to Catbox
         if: ${{ inputs.catbox_upload }}
         run: |
-          RESPONSE=$(curl -F "reqtype=fileupload" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://catbox.moe/user/api.php)
-          CATBOX_URL=$(echo $RESPONSE | grep -o -E 'https://files.catbox.moe/[^"]*')
+          RESPONSE=$(curl -F "reqtype=fileupload" -F "time=1h" -F "fileToUpload=@${{ github.workspace }}/main/packages/${{ steps.build_package.outputs.package }}" https://litterbox.catbox.moe/resources/internals/api.php)
+          CATBOX_URL=$(echo $RESPONSE | grep -o -E 'https://litter.catbox.moe/[^"]*')
           echo "Uploaded artifact to $CATBOX_URL"
-          CATBOX_FILE=$(echo $CATBOX_URL | sed 's|https://files.catbox.moe/||')
+          CATBOX_FILE=$(echo $CATBOX_URL | sed 's|https://litter.catbox.moe/||')
           # Pass Catbox URL to the release steps
           echo "CATBOX_FILE=$CATBOX_FILE" >> $GITHUB_ENV
           echo "CATBOX_URL=$CATBOX_URL" >> $GITHUB_ENV
-      
+
       - name: Prepare Release Notes
         if: ${{ inputs.create_release }}
         run: |
           export TODAY=$(date '+%Y-%m-%d')
-          sed "s/%ytliteplus_version%/${{ env.YTLITE_VERSION }}/g; s/%youtube_version%/5.0.1/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
+          sed "s/%ytliteplus_version%/${{ inputs.ytlite_version }}/g; s/%youtube_version%/${{ inputs.ytlite_version }}/g; s/%catbox_url%/${{ env.CATBOX_FILE }}/g; s/%date%/$TODAY/g" \
           main/.github/RELEASE_TEMPLATE/Release.md > ${{ github.workspace }}/release_notes.md
 
       - name: Create Draft Release
@@ -220,8 +217,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: v${{ env.YT_VERSION }}-5.0.1
-          name: v${{ env.YT_VERSION }}-5.0.1 - YTLitePlus
+          tag_name: v${{ env.YT_VERSION }}-${{ inputs.ytlite_version }}
+          name: v${{ env.YT_VERSION }}-${{ inputs.ytlite_version }} - YTLitePlus
           files: main/packages/*.ipa
           draft: true
           body_path: ${{ github.workspace }}/release_notes.md
@@ -238,7 +235,7 @@ jobs:
 
       - name: Job Summary
         run: |
-          echo -e '### 📺 Build Complete' >> $GITHUB_STEP_SUMMARY
+          echo -e '### 📺 YTLitePlus v${{ env.YT_VERSION }}-${{ inputs.ytlite_version }} Build Complete' >> $GITHUB_STEP_SUMMARY
 
       - name: Job Summary - Artifact Upload
         if: ${{ inputs.upload_artifact }}
@@ -248,7 +245,7 @@ jobs:
       - name: Job Summary - Catbox Upload
         if: ${{ inputs.catbox_upload}}
         run: |
-          echo -e '### 🐱 Catbox Upload\n\nThe Catbox upload was successful! Here is a permanent shareable link: '$CATBOX_URL >> $GITHUB_STEP_SUMMARY
+          echo -e '### 🐱 Catbox Upload\n\nThe Catbox upload was successful! '$CATBOX_URL >> $GITHUB_STEP_SUMMARY
 
       - name: Job Summary - Draft Release
         if: ${{ inputs.create_release }}
